@@ -147,6 +147,46 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
+// Get count of found reports by authenticated user
+router.get('/user/stats', authenticate, async (req, res) => {
+  try {
+    // req.user._id is available from the authenticate middleware
+    const userId = req.user._id;
+
+    // Count total found reports by this user
+    const totalFound = await FoundReport.countDocuments({ foundBy: userId });
+
+    // Count verified found reports (actually helped reunite families)
+    const verifiedFound = await FoundReport.countDocuments({ 
+      foundBy: userId, 
+      verifiedByParent: true 
+    });
+
+    // Count pending verification
+    const pendingVerification = await FoundReport.countDocuments({ 
+      foundBy: userId, 
+      status: 'pending' 
+    });
+
+    res.status(200).json({
+      success: true,
+      stats: {
+        totalFound,
+        verifiedFound,
+        pendingVerification
+      }
+    });
+
+  } catch (error) {
+    console.error('Get user found stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user statistics',
+      error: error.message
+    });
+  }
+});
+
 // Get specific found report
 router.get('/:foundId', authenticate, async (req, res) => {
   try {
