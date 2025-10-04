@@ -217,7 +217,7 @@ router.post('/', authenticate, [
   }
 });
 
-// Get all missing reports (with pagination and filters)
+// Get all missing reports (with pagination and filters) - FIXED VERSION
 router.get('/', authenticate, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -227,18 +227,15 @@ router.get('/', authenticate, async (req, res) => {
 
     let query = { status };
 
-    // Location-based filtering if coordinates provided
+    // Location-based filtering if coordinates provided (FIXED VERSION)
     if (req.query.lat && req.query.lng && req.query.radius) {
       const coordinates = [parseFloat(req.query.lng), parseFloat(req.query.lat)];
-      const radius = parseInt(req.query.radius) * 1000; // Convert km to meters
+      const radiusInKm = parseInt(req.query.radius);
+      const radiusInRadians = radiusInKm / 6371; // Earth's radius in km
 
       query.lastSeenLocation = {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: coordinates
-          },
-          $maxDistance: radius
+        $geoWithin: {
+          $centerSphere: [coordinates, radiusInRadians]
         }
       };
     }
