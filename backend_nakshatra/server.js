@@ -14,6 +14,9 @@ const adminRoutes = require('./routes/admin');
 
 const app = express();
 
+// Trust proxy - required when running behind a reverse proxy (like Render, Heroku, etc.)
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
 
@@ -39,7 +42,6 @@ const MONGODB_URI = 'mongodb+srv://karthik7133:Ch.karthik.7@cluster7133.yzxk6k4.
 
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
-  useUnifiedTopology: true,
 })
 .then(() => {
   console.log('✅ Connected to MongoDB successfully');
