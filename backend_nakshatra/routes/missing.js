@@ -75,14 +75,13 @@ router.post('/', authenticate, [
     // Find nearby users to notify (within 20km radius)
     let nearbyUsers = [];
     try {
+      const radiusInKm = 20;
+      const radiusInRadians = radiusInKm / 6371; // Earth's radius in km
+      
       nearbyUsers = await User.find({
         location: {
-          $near: {
-            $geometry: {
-              type: 'Point',
-              coordinates: lastSeenLocation.coordinates
-            },
-            $maxDistance: 20000 // 20km in meters
+          $geoWithin: {
+            $centerSphere: [lastSeenLocation.coordinates, radiusInRadians]
           }
         },
         _id: { $ne: req.user._id }
