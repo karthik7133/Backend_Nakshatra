@@ -51,7 +51,37 @@ router.put('/fcm-token', authenticate, [
   }
 });
 
-// Get user profile
+// Get current user profile (using token)
+router.get('/profile', authenticate, async (req, res) => {
+  try {
+    res.status(200).json({
+      success: true,
+      user: {
+        _id: req.user._id,
+        firebaseUid: req.user.firebaseUid,
+        name: req.user.name,
+        email: req.user.email,
+        phoneNumber: req.user.phoneNumber,
+        role: req.user.role,
+        profilePhotoUrl: req.user.profilePhotoUrl,
+        emailVerified: req.user.emailVerified,
+        location: req.user.location,
+        fcmToken: req.user.fcmToken,
+        createdAt: req.user.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Get user profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user profile',
+      error: error.message
+    });
+  }
+});
+
+// Get user profile by ID
 router.get('/:userId', authenticate, async (req, res) => {
   try {
     const user = await User.findById(req.params.userId);
@@ -78,8 +108,65 @@ router.get('/:userId', authenticate, async (req, res) => {
   }
 });
 
-// Update user profile
-router.put('/:userId', authenticate, checkOwnership, [
+// Update user profile by Firebase UID
+router.put('/:firebaseUid', authenticate, [
+  body('name').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
+  body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
+  body('profilePhotoUrl').optional().isURL().withMessage('Valid URL required for profile photo'),
+  body('emailVerified').optional().isBoolean().withMessage('Email verified must be boolean'),
+  body('location.address').optional().trim().isLength({ min: 3, max: 200 }).withMessage('Address must be 3-200 characters'),
+  body('location.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates must be [longitude, latitude]')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { name, phoneNumber, profilePhotoUrl, emailVerified, location } = req.body;
+    const updateData = {};
+
+    if (name) updateData.name = name;
+    if (phoneNumber) updateData.phoneNumber = phoneNumber;
+    if (profilePhotoUrl) updateData.profilePhotoUrl = profilePhotoUrl;
+    if (emailVerified !== undefined) updateData.emailVerified = emailVerified;
+    if (location) updateData.location = location;
+
+    const updatedUser = await User.findOneAndUpdate(
+      { firebaseUid: req.params.firebaseUid },
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: updatedUser
+    });
+
+  } catch (error) {
+    console.error('Update user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update profile',
+      error: error.message
+    });
+  }
+});
+
+// Update user profile by MongoDB ID
+router.put('/id/:userId', authenticate, checkOwnership, [
   body('name').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
   body('profilePhotoUrl').optional().isURL().withMessage('Valid URL required for profile photo'),

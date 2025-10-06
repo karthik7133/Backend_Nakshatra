@@ -23,13 +23,14 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
-// User Registration
+// Firebase User Registration
 router.post('/register', [
+  body('firebaseUid').notEmpty().withMessage('Firebase UID is required'),
   body('name').trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
-  body('phoneNumber').matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('role').optional().isIn(['user', 'admin']).withMessage('Invalid role')
+  body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
+  body('role').optional().isIn(['user', 'admin']).withMessage('Invalid role'),
+  body('emailVerified').optional().isBoolean().withMessage('Email verified must be boolean')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -41,50 +42,70 @@ router.post('/register', [
       });
     }
 
-    const { name, email, phoneNumber, password, role, profilePhotoUrl } = req.body;
+    const { firebaseUid, name, email, phoneNumber, role, profilePhotoUrl, emailVerified } = req.body;
 
-    // Check if user already exists
+    // Check if user already exists by Firebase UID or email
     const existingUser = await User.findOne({ 
-      $or: [{ email }, { phoneNumber }] 
+      $or: [{ firebaseUid }, { email }] 
     });
 
     if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User already exists with this email or phone number'
+      // Update existing user instead of creating new one
+      const updatedUser = await User.findOneAndUpdate(
+        { $or: [{ firebaseUid }, { email }] },
+        {
+          firebaseUid,
+          name,
+          email,
+          phoneNumber: phoneNumber || existingUser.phoneNumber,
+          role: role || existingUser.role,
+          profilePhotoUrl: profilePhotoUrl || existingUser.profilePhotoUrl,
+          emailVerified: emailVerified !== undefined ? emailVerified : existingUser.emailVerified
+        },
+        { new: true, runValidators: true }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: 'User updated successfully',
+        user: {
+          _id: updatedUser._id,
+          firebaseUid: updatedUser.firebaseUid,
+          name: updatedUser.name,
+          email: updatedUser.email,
+          role: updatedUser.role,
+          profilePhotoUrl: updatedUser.profilePhotoUrl,
+          emailVerified: updatedUser.emailVerified
+        }
       });
     }
 
     // Create new user
     const user = new User({
+      firebaseUid,
       name,
       email,
-      phoneNumber,
-      passwordHash: password, // Will be hashed by the model pre-save hook
+      phoneNumber: phoneNumber || '',
       role: role || 'user',
-      profilePhotoUrl
+      profilePhotoUrl,
+      emailVerified: emailVerified || false
     });
 
     await user.save();
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { userId: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE }
-    );
+    console.log(`✅ New user registered: ${user.name} (${user._id}) - Firebase UID: ${user.firebaseUid}`);
 
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      userId: user._id,
-      token,
       user: {
-        id: user._id,
+        _id: user._id,
+        firebaseUid: user.firebaseUid,
         name: user.name,
         email: user.email,
         role: user.role,
-        profilePhotoUrl: user.profilePhotoUrl
+        profilePhotoUrl: user.profilePhotoUrl,
+        emailVerified: user.emailVerified
       }
     });
 
