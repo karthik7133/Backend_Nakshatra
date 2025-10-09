@@ -1,10 +1,26 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
 const MissingReport = require('../models/MissingReport');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { authenticate, authorize } = require('../middleware/auth');
 const admin = require('../utils/firebaseAdmin');
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Configure multer for memory storage
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
 
 const router = express.Router();
 
@@ -319,7 +335,7 @@ router.get('/user/:userId', authenticate, async (req, res) => {
 });
 
 // Update missing report
-router.put('/:missingId', authenticate, [
+router.put('/:missingId', authenticate, upload.single('photo'), [
   body('name').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('age').optional().isInt({ min: 0, max: 18 }).withMessage('Age must be 0-18 years'),
   body('gender').optional().isIn(['male', 'female', 'other']).withMessage('Invalid gender'),
@@ -356,7 +372,17 @@ router.put('/:missingId', authenticate, [
       });
     }
 
-    const { name, age, gender, description, contactNumber, status, lastSeenLocation, photoUrl } = req.body;
+    // Handle both multipart form data and JSON
+    let { name, age, gender, description, contactNumber, status, lastSeenLocation, photoUrl } = req.body;
+    
+    // If lastSeenLocation is a string (from multipart), parse it
+    if (typeof lastSeenLocation === 'string') {
+      try {
+        lastSeenLocation = JSON.parse(lastSeenLocation);
+      } catch (e) {
+        console.error('Error parsing lastSeenLocation:', e);
+      }
+    }
     const updateData = {};
 
     // Update all allowed fields with explicit checks
@@ -392,6 +418,39 @@ router.put('/:missingId', authenticate, [
       }
       if (lastSeenLocation.coordinates && Array.isArray(lastSeenLocation.coordinates) && lastSeenLocation.coordinates.length === 2) {
         updateData.lastSeenLocation.coordinates = lastSeenLocation.coordinates;
+      }
+    }
+
+    // Handle image upload if file is provided
+    if (req.file) {
+      try {
+        // Upload image to Cloudinary
+        const result = await new Promise((resolve, reject) => {
+          cloudinary.uploader.upload_stream(
+            {
+              resource_type: 'image',
+              folder: 'missing_reports',
+              transformation: [
+                { width: 800, height: 800, crop: 'limit' },
+                { quality: 'auto' }
+              ]
+            },
+            (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          ).end(req.file.buffer);
+        });
+
+        updateData.photoUrl = result.secure_url;
+        console.log('Image uploaded successfully:', result.secure_url);
+      } catch (error) {
+        console.error('Image upload error:', error);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to upload image',
+          error: error.message
+        });
       }
     }
 
