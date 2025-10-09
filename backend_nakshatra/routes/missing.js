@@ -330,11 +330,8 @@ router.put('/:missingId', authenticate, [
   body('lastSeenLocation.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates required [longitude, latitude]')
 ], async (req, res) => {
   try {
-    console.log('Update request body:', JSON.stringify(req.body, null, 2));
-    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      console.log('Validation errors:', errors.array());
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -365,50 +362,41 @@ router.put('/:missingId', authenticate, [
     // Update all allowed fields with explicit checks
     if (name && name.trim()) {
       updateData.name = name.trim();
-      console.log('Updating name:', name.trim());
     }
     if (age !== undefined && age !== null) {
       updateData.age = parseInt(age);
-      console.log('Updating age:', parseInt(age));
     }
     if (gender && gender.trim()) {
       updateData.gender = gender.toLowerCase().trim();
-      console.log('Updating gender:', gender.toLowerCase().trim());
     }
     if (description && description.trim()) {
       updateData.description = description.trim();
-      console.log('Updating description:', description.trim());
     }
     if (contactNumber && contactNumber.trim()) {
       updateData.contactNumber = contactNumber.trim();
-      console.log('Updating contactNumber:', contactNumber.trim());
     }
     if (status && status.trim()) {
       updateData.status = status.trim();
-      console.log('Updating status:', status.trim());
     }
     if (photoUrl && photoUrl.trim()) {
       updateData.photoUrl = photoUrl.trim();
-      console.log('Updating photoUrl:', photoUrl.trim());
     }
     
-    // Handle location update with explicit checks
+    // Handle location update with proper GeoJSON format
     if (lastSeenLocation && typeof lastSeenLocation === 'object') {
-      updateData.lastSeenLocation = {};
+      updateData.lastSeenLocation = {
+        type: 'Point' // Required for GeoJSON
+      };
       if (lastSeenLocation.address && lastSeenLocation.address.trim()) {
         updateData.lastSeenLocation.address = lastSeenLocation.address.trim();
-        console.log('Updating address:', lastSeenLocation.address.trim());
       }
       if (lastSeenLocation.coordinates && Array.isArray(lastSeenLocation.coordinates) && lastSeenLocation.coordinates.length === 2) {
         updateData.lastSeenLocation.coordinates = lastSeenLocation.coordinates;
-        console.log('Updating coordinates:', lastSeenLocation.coordinates);
       }
     }
 
     // Update the updatedAt timestamp
     updateData.updatedAt = new Date();
-    
-    console.log('Final updateData:', JSON.stringify(updateData, null, 2));
 
     const updatedReport = await MissingReport.findByIdAndUpdate(
       req.params.missingId,
