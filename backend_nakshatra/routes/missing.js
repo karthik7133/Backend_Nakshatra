@@ -1,5 +1,5 @@
 const express = require('express');
-const { body, validationResult } = require('express-validator');
+const { body, validationResult, check } = require('express-validator');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const MissingReport = require('../models/MissingReport');
@@ -24,6 +24,26 @@ const upload = multer({
 
 const router = express.Router();
 
+// --- START: SECURE URL VALIDATOR (PATCH for GHSA-9965-vmph-33xx) ---
+/**
+ * Custom validator to securely check if a string is a valid HTTP/HTTPS URL.
+ * Mitigates the validator.js bypass vulnerability.
+ */
+const isSecureUrl = (value) => {
+  if (!value) return true;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false;
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+};
+// --- END: SECURE URL VALIDATOR ---
+
+
 // Helper function to calculate distance between two coordinates (Haversine formula)
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // Earth's radius in km
@@ -41,7 +61,8 @@ router.post('/', authenticate, [
   body('name').trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('age').isInt({ min: 0, max: 18 }).withMessage('Age must be 0-18 years'),
   body('gender').isIn(['male', 'female', 'other']).withMessage('Invalid gender'),
-  body('photoUrl').isURL().withMessage('Valid photo URL required'),
+  // SECURE PATCH: Use custom validator
+  check('photoUrl').custom(isSecureUrl).withMessage('Valid HTTP/HTTPS photo URL required'),
   body('description').trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
   body('lastSeenLocation.coordinates').isArray({ min: 2, max: 2 }).withMessage('Coordinates required [longitude, latitude]'),
   body('lastSeenLocation.address').trim().isLength({ min: 5, max: 200 }).withMessage('Address must be 5-200 characters'),
@@ -342,6 +363,8 @@ router.put('/:missingId', authenticate, upload.single('photo'), [
   body('description').optional().trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
   body('contactNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit contact number required'),
   body('status').optional().isIn(['active', 'found', 'closed']).withMessage('Invalid status'),
+  // SECURE PATCH: Use custom validator
+  check('photoUrl').optional().custom(isSecureUrl).withMessage('Valid HTTP/HTTPS photo URL required'),
   body('lastSeenLocation.address').optional().trim().isLength({ min: 5, max: 200 }).withMessage('Address must be 5-200 characters'),
   body('lastSeenLocation.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates required [longitude, latitude]')
 ], async (req, res) => {
@@ -511,6 +534,71 @@ router.delete('/:missingId', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to delete missing report',
+      error: error.message
+    });
+  }
+});
+
+// Close or mark a missing report as found (Manual Parent Action) - NEW ROUTE
+router.patch('/:missingId/status', authenticate, [
+  body('status')
+    .isIn(['found', 'closed'])
+    .withMessage('Invalid status. Must be "found" or "closed"'),
+  body('closeReason').optional().trim().isLength({ max: 500 }).withMessage('Reason cannot exceed 500 characters')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { status, closeReason } = req.body;
+    const missingReport = await MissingReport.findById(req.params.missingId);
+
+    if (!missingReport) {
+      return res.status(404).json({
+        success: false,
+        message: 'Missing report not found'
+      });
+    }
+
+    // Check if user is the owner of the report
+    if (missingReport.reportedBy.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You can only close your own reports.'
+      });
+    }
+    
+    // Prevent re-opening a closed case via this route
+    if (missingReport.status !== 'active') {
+        return res.status(400).json({
+            success: false,
+            message: `This report is already marked as ${missingReport.status}`
+        });
+    }
+
+    // Update the status and persist the closeReason
+    missingReport.status = status;
+    missingReport.closeReason = closeReason || (status === 'found' ? 'Found by family/self-resolved' : 'Closed manually by reporter');
+
+    await missingReport.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Missing report status updated to '${status}' successfully`,
+      updatedReport: missingReport
+    });
+
+  } catch (error) {
+    console.error('Close missing report error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to close missing report',
       error: error.message
     });
   }

@@ -64,6 +64,12 @@ const missingReportSchema = new mongoose.Schema({
     enum: ['active', 'found', 'closed'],
     default: 'active'
   },
+  // --- NEW FIELD FOR MANUAL CLOSURE REASON ---
+  closeReason: {
+    type: String,
+    maxlength: [500, 'Closure reason cannot exceed 500 characters'],
+    default: null
+  },
   priority: {
     type: String,
     enum: ['low', 'medium', 'high', 'urgent'],

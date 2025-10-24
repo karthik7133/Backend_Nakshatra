@@ -5,10 +5,34 @@ const { authenticate, checkOwnership } = require('../middleware/auth');
 
 const router = express.Router();
 
+// --- START: SECURE URL VALIDATOR (PATCH for GHSA-9965-vmph-33xx) ---
+/**
+ * Custom validator to securely check if a string is a valid HTTP/HTTPS URL.
+ * Mitigates the validator.js bypass vulnerability.
+ * @param {string} value The URL string to validate.
+ * @returns {boolean} True if valid, false otherwise.
+ */
+const isSecureUrl = (value) => {
+  if (!value) return true; // Allows optional fields to be skipped
+  try {
+    const url = new URL(value);
+    // Enforce safe protocols (http: and https:)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false;
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+};
+// --- END: SECURE URL VALIDATOR ---
+
+
 // Update FCM Token
 router.put('/fcm-token', authenticate, [
   body('fcmToken').notEmpty().withMessage('FCM token is required')
 ], async (req, res) => {
+// ... existing FCM token update logic
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -54,6 +78,7 @@ router.put('/fcm-token', authenticate, [
 // Get current user profile (using token)
 router.get('/profile', authenticate, async (req, res) => {
   try {
+// ... existing profile logic
     res.status(200).json({
       success: true,
       user: {
@@ -84,6 +109,7 @@ router.get('/profile', authenticate, async (req, res) => {
 // Get user profile by ID
 router.get('/:userId', authenticate, async (req, res) => {
   try {
+// ... existing get user by id logic
     const user = await User.findById(req.params.userId);
     
     if (!user) {
@@ -112,11 +138,13 @@ router.get('/:userId', authenticate, async (req, res) => {
 router.put('/:firebaseUid', authenticate, [
   body('name').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
-  body('profilePhotoUrl').optional().isURL().withMessage('Valid URL required for profile photo'),
+  // PATCH: Replaced isURL() with custom secure validator
+  body('profilePhotoUrl').optional().custom(isSecureUrl).withMessage('Valid HTTP/HTTPS URL required for profile photo'),
   body('emailVerified').optional().isBoolean().withMessage('Email verified must be boolean'),
   body('location.address').optional().trim().isLength({ min: 3, max: 200 }).withMessage('Address must be 3-200 characters'),
   body('location.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates must be [longitude, latitude]')
 ], async (req, res) => {
+// ... existing update logic
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -169,10 +197,12 @@ router.put('/:firebaseUid', authenticate, [
 router.put('/id/:userId', authenticate, checkOwnership, [
   body('name').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
-  body('profilePhotoUrl').optional().isURL().withMessage('Valid URL required for profile photo'),
+  // PATCH: Replaced isURL() with custom secure validator
+  body('profilePhotoUrl').optional().custom(isSecureUrl).withMessage('Valid HTTP/HTTPS URL required for profile photo'),
   body('location.address').optional().trim().isLength({ min: 3, max: 200 }).withMessage('Address must be 3-200 characters'),
   body('location.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates must be [longitude, latitude]')
 ], async (req, res) => {
+// ... existing update logic
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -222,6 +252,7 @@ router.put('/id/:userId', authenticate, checkOwnership, [
 
 // Delete user account
 router.delete('/:userId', authenticate, checkOwnership, async (req, res) => {
+// ... existing delete logic
   try {
     const deletedUser = await User.findByIdAndDelete(req.params.userId);
     
@@ -249,10 +280,12 @@ router.delete('/:userId', authenticate, checkOwnership, async (req, res) => {
 
 // Update user location
 router.post('/update-location', authenticate, [
+// ... existing location update logic
   body('latitude').isFloat({ min: -90, max: 90 }).withMessage('Valid latitude required'),
   body('longitude').isFloat({ min: -180, max: 180 }).withMessage('Valid longitude required'),
   body('address').optional().trim().isLength({ min: 1, max: 200 }).withMessage('Address must be 1-200 characters')
 ], async (req, res) => {
+// ... existing location update logic
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -305,6 +338,7 @@ router.post('/nearby', authenticate, [
   body('coordinates').isArray({ min: 2, max: 2 }).withMessage('Coordinates must be [longitude, latitude]'),
   body('radius').optional().isInt({ min: 1, max: 50 }).withMessage('Radius must be 1-50 km')
 ], async (req, res) => {
+// ... existing nearby users logic
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {

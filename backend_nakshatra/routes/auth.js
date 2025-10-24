@@ -9,6 +9,29 @@ const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
+// --- START: SECURE URL VALIDATOR (PATCH for GHSA-9965-vmph-33xx) ---
+/**
+ * Custom validator to securely check if a string is a valid HTTP/HTTPS URL.
+ * Mitigates the validator.js bypass vulnerability.
+ * @param {string} value The URL string to validate.
+ * @returns {boolean} True if valid, false otherwise.
+ */
+const isSecureUrl = (value) => {
+  if (!value) return true; // Allows optional fields to be skipped
+  try {
+    const url = new URL(value);
+    // Enforce safe protocols (http: and https:)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false;
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+};
+// --- END: SECURE URL VALIDATOR ---
+
+
 // Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -30,6 +53,8 @@ router.post('/register', [
   body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
   body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
   body('role').optional().isIn(['user', 'admin']).withMessage('Invalid role'),
+  // PATCH: Added validation for profilePhotoUrl using secure custom function
+  body('profilePhotoUrl').optional().custom(isSecureUrl).withMessage('Valid HTTP/HTTPS URL required for profile photo'),
   body('emailVerified').optional().isBoolean().withMessage('Email verified must be boolean')
 ], async (req, res) => {
   try {
@@ -125,6 +150,7 @@ router.post('/login', [
   body('password').notEmpty().withMessage('Password is required')
 ], async (req, res) => {
   try {
+// ... rest of the login route
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
