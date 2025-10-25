@@ -258,12 +258,19 @@ router.get('/', authenticate, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    const status = req.query.status || 'active';
+    const status = req.query.status;          // Allow undefined to fetch all
+    const searchName = req.query.search;      // NEW: Search by name
+    const searchAddress = req.query.address;  // NEW: Search by address
     const skip = (page - 1) * limit;
 
-    let query = { status };
+    let query = {}; // Start with empty query
 
-    // Location-based filtering if coordinates provided (FIXED VERSION)
+    // 1. Filter by Status (Applies only if status is explicitly provided and valid)
+    if (status && ['active', 'found', 'closed'].includes(status)) {
+        query.status = status;
+    }
+    
+    // 2. Location-based filtering (existing logic, retained for compatibility)
     if (req.query.lat && req.query.lng && req.query.radius) {
       const coordinates = [parseFloat(req.query.lng), parseFloat(req.query.lat)];
       const radiusInKm = parseInt(req.query.radius);
@@ -275,7 +282,17 @@ router.get('/', authenticate, async (req, res) => {
         }
       };
     }
-
+    
+    // 3. Search by Name (Case-insensitive regex search)
+    if (searchName) {
+        query.name = { $regex: new RegExp(searchName, 'i') };
+    }
+    
+    // 4. Filter by Location Address (Case-insensitive regex search)
+    if (searchAddress) {
+        query['lastSeenLocation.address'] = { $regex: new RegExp(searchAddress, 'i') };
+    }
+    
     const missingReports = await MissingReport.find(query)
       .populate('reportedBy', 'name phoneNumber')
       .sort({ createdAt: -1 })
