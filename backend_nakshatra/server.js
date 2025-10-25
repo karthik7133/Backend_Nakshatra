@@ -34,7 +34,7 @@ app.use(limiter);
 // === CRITICAL CORS FIX ===
 const allowedOrigins = [
   // 1. Your Netlify Admin Panel URL
-  'https://extraordinary-madeleine-c66704.netlify.app',
+  'https://nakshatra-adminpanel.netlify.app',
   // 2. Your Render API URL (Required if the API makes requests to itself or if used as a secondary access point)
   'https://nakshatra-km-73.onrender.com', 
   // 3. Environment variable (your Flutter app client)
