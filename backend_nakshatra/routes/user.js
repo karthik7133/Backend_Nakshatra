@@ -248,11 +248,16 @@ router.put('/id/:userId', authenticate, checkOwnership, [
 
 
 // Delete user account
-router.delete('/:userId', authenticate, /* REMOVED checkOwnership */ async (req, res) => {
+router.delete('/:userId', authenticate, async (req, res) => {
+  console.log(`\n🔒 USER DELETE REQUEST: User ${req.user._id} (${req.user.role}) attempting to delete ${req.params.userId}`);
+
   try {
-    // Check if the authenticated user is attempting to delete their own account OR
-    // if the authenticated user is an Admin (assuming Admin role is defined in req.user)
-    if (req.user.role !== 'admin' && req.user.role !== 'super_admin' && req.user._id.toString() !== req.params.userId) {
+    // 🎯 FIX: Implement Authorization check here. Admin bypasses ownership.
+    const isSelfDeletion = req.user._id.toString() === req.params.userId;
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
+
+    if (!isSelfDeletion && !isAdmin) {
+        console.warn(`❌ DELETE FAILED: User is not owner and not Admin.`);
         return res.status(403).json({
             success: false,
             message: 'Access denied. You can only delete your own account unless you are an admin.'
@@ -263,6 +268,7 @@ router.delete('/:userId', authenticate, /* REMOVED checkOwnership */ async (req,
     const userToDelete = await User.findById(req.params.userId);
 
     if (!userToDelete) {
+      console.warn(`❌ DELETE FAILED: User not found in DB.`);
       return res.status(404).json({
         success: false,
         message: 'User not found'
@@ -274,19 +280,20 @@ router.delete('/:userId', authenticate, /* REMOVED checkOwnership */ async (req,
         await admin.auth().deleteUser(userToDelete.firebaseUid);
         console.log(`✅ Firebase user deleted: ${userToDelete.firebaseUid}`);
     } catch (firebaseError) {
-        console.error('⚠️ Could not delete Firebase user (already deleted or token issue):', firebaseError.message);
+        console.error('⚠️ Could not delete Firebase user:', firebaseError.message);
     }
 
     // 3. Delete user from MongoDB
     await User.findByIdAndDelete(req.params.userId);
 
+    console.log(`🎉 DELETE SUCCESS: User ${req.params.userId} removed.`);
     res.status(200).json({
       success: true,
       message: 'Account deleted successfully from DB and Firebase'
     });
 
   } catch (error) {
-    console.error('Delete user error:', error);
+    console.error('❌ CRITICAL DELETE ERROR:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to delete account',
@@ -295,7 +302,6 @@ router.delete('/:userId', authenticate, /* REMOVED checkOwnership */ async (req,
   }
 });
 
-// ... (omitted last routes and module.exports) ...
 
 // Update user location
 router.post('/update-location', authenticate, [

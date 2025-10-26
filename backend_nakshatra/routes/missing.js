@@ -521,33 +521,40 @@ router.put('/:missingId', authenticate, upload.single('photo'), [
 
 // Delete missing report
 router.delete('/:missingId', authenticate, async (req, res) => {
+  console.log(`\n🔒 MISSING REPORT DELETE REQUEST: User ${req.user._id} (${req.user.role}) attempting to delete ${req.params.missingId}`);
   try {
     const missingReport = await MissingReport.findById(req.params.missingId);
 
     if (!missingReport) {
+      console.warn(`❌ DELETE FAILED: Report not found.`);
       return res.status(404).json({
         success: false,
         message: 'Missing report not found'
       });
     }
 
-    // Check if user is the owner of the report
-    if (missingReport.reportedBy.toString() !== req.user._id.toString()) {
+    // 🎯 FIX: Allow deletion if user is the report owner OR is an Admin
+    const isOwner = missingReport.reportedBy.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
+
+    if (!isOwner && !isAdmin) {
+      console.warn(`❌ DELETE FAILED: Not owner and not Admin.`);
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only delete your own reports.'
+        message: 'Access denied. Only the report owner or an admin can delete this report.'
       });
     }
 
     await MissingReport.findByIdAndDelete(req.params.missingId);
 
+    console.log(`🎉 DELETE SUCCESS: Missing Report ${req.params.missingId} removed.`);
     res.status(200).json({
       success: true,
       message: 'Missing report deleted successfully'
     });
 
   } catch (error) {
-    console.error('Delete missing report error:', error);
+    console.error('❌ CRITICAL DELETE ERROR:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to delete missing report',

@@ -493,38 +493,45 @@ router.patch('/:foundId/verify', authenticate, [
   }
 });
 
-// Delete found report
-router.delete('/:foundId', authenticate, async (req, res) => {
+// Delete missing report
+router.delete('/:missingId', authenticate, async (req, res) => {
+  console.log(`\n🔒 MISSING REPORT DELETE REQUEST: User ${req.user._id} (${req.user.role}) attempting to delete ${req.params.missingId}`);
   try {
-    const foundReport = await FoundReport.findById(req.params.foundId);
+    const missingReport = await MissingReport.findById(req.params.missingId);
 
-    if (!foundReport) {
+    if (!missingReport) {
+      console.warn(`❌ DELETE FAILED: Report not found.`);
       return res.status(404).json({
         success: false,
-        message: 'Found report not found'
+        message: 'Missing report not found'
       });
     }
 
-    // Check if user is the one who submitted the found report
-    if (foundReport.foundBy.toString() !== req.user._id.toString()) {
+    // 🎯 FIX: Allow deletion if user is the report owner OR is an Admin
+    const isOwner = missingReport.reportedBy.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
+
+    if (!isOwner && !isAdmin) {
+      console.warn(`❌ DELETE FAILED: Not owner and not Admin.`);
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only delete your own found reports.'
+        message: 'Access denied. Only the report owner or an admin can delete this report.'
       });
     }
 
-    await FoundReport.findByIdAndDelete(req.params.foundId);
+    await MissingReport.findByIdAndDelete(req.params.missingId);
 
+    console.log(`🎉 DELETE SUCCESS: Missing Report ${req.params.missingId} removed.`);
     res.status(200).json({
       success: true,
-      message: 'Found report deleted successfully'
+      message: 'Missing report deleted successfully'
     });
 
   } catch (error) {
-    console.error('Delete found report error:', error);
+    console.error('❌ CRITICAL DELETE ERROR:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to delete found report',
+      message: 'Failed to delete missing report',
       error: error.message
     });
   }
