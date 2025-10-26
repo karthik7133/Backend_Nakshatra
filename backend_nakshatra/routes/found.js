@@ -6,7 +6,7 @@ const FoundReport = require('../models/FoundReport');
 const MissingReport = require('../models/MissingReport');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, authenticateAdminOrUser } = require('../middleware/auth');
 const admin = require('../utils/firebaseAdmin');
 const { compareFaces } = require('../utils/faceRecognition'); // Assumed utility for compareFaces
 const axios = require('axios'); // Required for the new check-face endpoint
@@ -496,8 +496,8 @@ router.patch('/:foundId/verify', authenticate, [
 });
 
 // Delete found report
-router.delete('/:foundId', authenticate, async (req, res) => {
-  console.log(`\n🔒 FOUND REPORT DELETE REQUEST: User ${req.user._id} (Role: ${req.user.role}) attempting to delete ${req.params.foundId}`);
+router.delete('/:foundId', authenticateAdminOrUser, async (req, res) => {
+  console.log(`\n🔒 FOUND REPORT DELETE REQUEST: User ${req.user._id} (Admin: ${req.isAdmin}) attempting to delete ${req.params.foundId}`);
   try {
     const foundReport = await FoundReport.findById(req.params.foundId);
 
@@ -511,10 +511,9 @@ router.delete('/:foundId', authenticate, async (req, res) => {
 
     // 🎯 FIX: Authorization check. Allow deletion if user is the report owner OR is an Admin
     const isOwner = foundReport.foundBy.toString() === req.user._id.toString();
-    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
     
-    if (!isOwner && !isAdmin) {
-      console.warn(`❌ DELETE FAILED (403): Not owner and not Admin. Current Role: ${req.user.role}`);
+    if (!isOwner && !req.isAdmin) {
+      console.warn(`❌ DELETE FAILED (403): Not owner and not Admin.`);
       return res.status(403).json({
         success: false,
         message: 'Access denied. You can only delete your own found reports unless you are an admin.'

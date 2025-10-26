@@ -5,7 +5,7 @@ const cloudinary = require('cloudinary').v2;
 const MissingReport = require('../models/MissingReport');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authenticateAdminOrUser, authorize } = require('../middleware/auth');
 const admin = require('../utils/firebaseAdmin');
 
 // Configure Cloudinary
@@ -520,8 +520,8 @@ router.put('/:missingId', authenticate, upload.single('photo'), [
 });
 
 // Delete missing report
-router.delete('/:missingId', authenticate, async (req, res) => {
-  console.log(`\n🔒 MISSING REPORT DELETE REQUEST: User ${req.user._id} (Role: ${req.user.role}) attempting to delete ${req.params.missingId}`);
+router.delete('/:missingId', authenticateAdminOrUser, async (req, res) => {
+  console.log(`\n🔒 MISSING REPORT DELETE REQUEST: User ${req.user._id} (Admin: ${req.isAdmin}) attempting to delete ${req.params.missingId}`);
   try {
     const missingReport = await MissingReport.findById(req.params.missingId);
 
@@ -535,10 +535,9 @@ router.delete('/:missingId', authenticate, async (req, res) => {
 
     // 🎯 FIX: Authorization check. Allow deletion if user is the report owner OR is an Admin
     const isOwner = missingReport.reportedBy.toString() === req.user._id.toString();
-    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
 
-    if (!isOwner && !isAdmin) {
-      console.warn(`❌ DELETE FAILED (403): Not owner and not Admin. Current Role: ${req.user.role}`);
+    if (!isOwner && !req.isAdmin) {
+      console.warn(`❌ DELETE FAILED (403): Not owner and not Admin.`);
       return res.status(403).json({
         success: false,
         message: 'Access denied. Only the report owner or an admin can delete this report.'

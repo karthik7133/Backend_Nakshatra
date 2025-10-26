@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
-const { authenticate, checkOwnership } = require('../middleware/auth');
+const { authenticate, authenticateAdminOrUser, checkOwnership } = require('../middleware/auth');
 const admin = require('../utils/firebaseAdmin'); // 🎯 CRITICAL: Import Firebase Admin SDK
 
 const router = express.Router();
@@ -248,16 +248,15 @@ router.put('/id/:userId', authenticate, checkOwnership, [
 
 
 // Delete user account
-router.delete('/:userId', authenticate, async (req, res) => {
-  console.log(`\n🔒 USER DELETE REQUEST: User ${req.user._id} (Role: ${req.user.role}) attempting to delete ${req.params.userId}`);
+router.delete('/:userId', authenticateAdminOrUser, async (req, res) => {
+  console.log(`\n🔒 USER DELETE REQUEST: User ${req.user._id} (Admin: ${req.isAdmin}) attempting to delete ${req.params.userId}`);
 
   try {
     // 🎯 FIX: Authorization check: Admin bypasses ownership.
     const isSelfDeletion = req.user._id.toString() === req.params.userId;
-    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
 
-    if (!isSelfDeletion && !isAdmin) {
-        console.warn(`❌ DELETE FAILED (403): User is not owner and not Admin. Role: ${req.user.role}`);
+    if (!isSelfDeletion && !req.isAdmin) {
+        console.warn(`❌ DELETE FAILED (403): User is not owner and not Admin.`);
         return res.status(403).json({
             success: false,
             message: 'Access denied. You can only delete your own account unless you are an admin.'
@@ -286,7 +285,7 @@ router.delete('/:userId', authenticate, async (req, res) => {
     // 3. Delete user from MongoDB
     await User.findByIdAndDelete(req.params.userId);
 
-    console.log(`🎉 DELETE SUCCESS: User ${req.params.userId} removed by Admin/Owner.`);
+    console.log(`🎉 DELETE SUCCESS: User ${req.params.userId} removed by ${req.isAdmin ? 'Admin' : 'Owner'}.`);
     res.status(200).json({
       success: true,
       message: 'Account deleted successfully from DB and Firebase'
