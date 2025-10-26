@@ -1,3 +1,5 @@
+// routes/found.js (Finalized with Admin Delete Bypass and Logging)
+
 const express = require('express');
 const { body, validationResult, check } = require('express-validator');
 const FoundReport = require('../models/FoundReport');
@@ -493,45 +495,45 @@ router.patch('/:foundId/verify', authenticate, [
   }
 });
 
-// Delete missing report
-router.delete('/:missingId', authenticate, async (req, res) => {
-  console.log(`\n🔒 MISSING REPORT DELETE REQUEST: User ${req.user._id} (${req.user.role}) attempting to delete ${req.params.missingId}`);
+// Delete found report
+router.delete('/:foundId', authenticate, async (req, res) => {
+  console.log(`\n🔒 FOUND REPORT DELETE REQUEST: User ${req.user._id} (Role: ${req.user.role}) attempting to delete ${req.params.foundId}`);
   try {
-    const missingReport = await MissingReport.findById(req.params.missingId);
+    const foundReport = await FoundReport.findById(req.params.foundId);
 
-    if (!missingReport) {
+    if (!foundReport) {
       console.warn(`❌ DELETE FAILED: Report not found.`);
       return res.status(404).json({
         success: false,
-        message: 'Missing report not found'
+        message: 'Found report not found'
       });
     }
 
-    // 🎯 FIX: Allow deletion if user is the report owner OR is an Admin
-    const isOwner = missingReport.reportedBy.toString() === req.user._id.toString();
+    // 🎯 FIX: Authorization check. Allow deletion if user is the report owner OR is an Admin
+    const isOwner = foundReport.foundBy.toString() === req.user._id.toString();
     const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
-
+    
     if (!isOwner && !isAdmin) {
-      console.warn(`❌ DELETE FAILED: Not owner and not Admin.`);
+      console.warn(`❌ DELETE FAILED (403): Not owner and not Admin. Current Role: ${req.user.role}`);
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Only the report owner or an admin can delete this report.'
+        message: 'Access denied. You can only delete your own found reports unless you are an admin.'
       });
     }
 
-    await MissingReport.findByIdAndDelete(req.params.missingId);
+    await FoundReport.findByIdAndDelete(req.params.foundId);
 
-    console.log(`🎉 DELETE SUCCESS: Missing Report ${req.params.missingId} removed.`);
+    console.log(`🎉 DELETE SUCCESS: Found Report ${req.params.foundId} removed.`);
     res.status(200).json({
       success: true,
-      message: 'Missing report deleted successfully'
+      message: 'Found report deleted successfully'
     });
 
   } catch (error) {
     console.error('❌ CRITICAL DELETE ERROR:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to delete missing report',
+      message: 'Failed to delete found report',
       error: error.message
     });
   }
