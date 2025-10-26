@@ -246,9 +246,19 @@ router.put('/id/:userId', authenticate, checkOwnership, [
   }
 });
 
+
 // Delete user account
-router.delete('/:userId', authenticate, checkOwnership, async (req, res) => {
+router.delete('/:userId', authenticate, /* REMOVED checkOwnership */ async (req, res) => {
   try {
+    // Check if the authenticated user is attempting to delete their own account OR
+    // if the authenticated user is an Admin (assuming Admin role is defined in req.user)
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin' && req.user._id.toString() !== req.params.userId) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. You can only delete your own account unless you are an admin.'
+        });
+    }
+
     // 1. Find the user first to get their Firebase UID
     const userToDelete = await User.findById(req.params.userId);
 
@@ -260,12 +270,10 @@ router.delete('/:userId', authenticate, checkOwnership, async (req, res) => {
     }
 
     // 2. Delete user from Firebase Authentication
-    // This ensures no orphaned Firebase accounts remain
     try {
         await admin.auth().deleteUser(userToDelete.firebaseUid);
         console.log(`✅ Firebase user deleted: ${userToDelete.firebaseUid}`);
     } catch (firebaseError) {
-        // Log error but continue to delete the DB record if Firebase user already doesn't exist
         console.error('⚠️ Could not delete Firebase user (already deleted or token issue):', firebaseError.message);
     }
 
@@ -286,6 +294,8 @@ router.delete('/:userId', authenticate, checkOwnership, async (req, res) => {
     });
   }
 });
+
+// ... (omitted last routes and module.exports) ...
 
 // Update user location
 router.post('/update-location', authenticate, [
