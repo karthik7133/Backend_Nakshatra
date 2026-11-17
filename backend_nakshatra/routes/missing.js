@@ -384,17 +384,16 @@ router.get('/', authenticate, async (req, res) => {
     let query = { status };
 
     // Location-based filtering if coordinates provided
+    // NOTE: Using $geoWithin/$centerSphere instead of $near to allow .sort() on createdAt
     if (req.query.lat && req.query.lng && req.query.radius) {
-      const coordinates = [parseFloat(req.query.lng), parseFloat(req.query.lat)];
-      const radius = parseInt(req.query.radius) * 1000; // Convert km to meters
+      const lat = parseFloat(req.query.lat);
+      const lng = parseFloat(req.query.lng);
+      const radiusKm = parseFloat(req.query.radius);
+      const radiusRadians = radiusKm / 6371; // Earth radius in km
 
-      query.lastSeenLocation = {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: coordinates
-          },
-          $maxDistance: radius
+      query['lastSeenLocation.coordinates'] = {
+        $geoWithin: {
+          $centerSphere: [[lng, lat], radiusRadians]
         }
       };
     }
