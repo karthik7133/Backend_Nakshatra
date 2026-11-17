@@ -9,6 +9,34 @@ const admin = require('../utils/firebaseAdmin');
 const router = express.Router();
 
 // ============================================================
+// DEBUG: Test FCM directly — GET /api/missing/system/test-fcm?userId=xxx&secret=xxx
+// ============================================================
+router.get('/system/test-fcm', async (req, res) => {
+  const { userId, secret } = req.query;
+  const expectedSecret = process.env.SYSTEM_SECRET || 'nakshatra_system_2024';
+  if (secret !== expectedSecret) return res.status(403).json({ success: false, message: 'Unauthorized' });
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (!user.fcmToken) return res.status(200).json({ success: false, message: 'No FCM token stored', fcmToken: null });
+
+    const msg = {
+      notification: { title: 'Test Notification', body: 'FCM test from Nakshatra backend' },
+      data: { type: 'test', click_action: 'FLUTTER_NOTIFICATION_CLICK' },
+      android: { priority: 'high', notification: { channelId: 'nakshatra_alerts' } },
+      token: user.fcmToken
+    };
+
+    const result = await admin.messaging().send(msg);
+    return res.status(200).json({ success: true, fcmSent: true, messageId: result, tokenPreview: user.fcmToken.substring(0, 30) + '...' });
+  } catch (err) {
+    return res.status(200).json({ success: false, fcmSent: false, error: err.message, errorCode: err.code, tokenPreview: (await User.findById(userId))?.fcmToken?.substring(0, 30) + '...' });
+  }
+});
+
+// ============================================================
 // INTERNAL SYSTEM ENDPOINT — Called by Python scanner
 // POST /api/missing/system/camera-alert
 // Body: { missingId, similarityScore, systemSecret }
