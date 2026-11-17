@@ -1,8 +1,9 @@
 const jwt = require('jsonwebtoken');
+const admin = require('../utils/firebaseAdmin');
 const User = require('../models/User');
 const Admin = require('../models/Admin');
 
-// Authenticate user token
+// Authenticate user token (supports both Firebase ID tokens and custom JWTs)
 const authenticate = async (req, res, next) => {
   try {
     const token = req.header('Authorization')?.replace('Bearer ', '');
@@ -14,22 +15,59 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId).select('-passwordHash');
-    
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token. User not found.'
-      });
+    let user = null;
+
+    // 1. Try Firebase ID Token verification
+    try {
+      if (admin && admin.auth) {
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        
+        // Find user by Firebase UID first, fallback to email
+        user = await User.findOne({ firebaseUid: decodedToken.uid }).select('-passwordHash');
+        
+        if (!user && decodedToken.email) {
+          user = await User.findOne({ email: decodedToken.email.toLowerCase() }).select('-passwordHash');
+          if (user) {
+            user.firebaseUid = decodedToken.uid;
+            if (decodedToken.email_verified !== undefined) {
+              user.emailVerified = decodedToken.email_verified;
+            }
+            await user.save();
+          }
+        }
+
+        if (user) {
+          req.user = user;
+          return next();
+        }
+      }
+    } catch (firebaseErr) {
+      // Not a valid Firebase token, fallback to standard JWT
     }
 
-    req.user = user;
-    next();
+    // 2. Fallback to standard backend JWT verification
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      user = await User.findById(decoded.userId).select('-passwordHash');
+      
+      if (user) {
+        req.user = user;
+        return next();
+      }
+    } catch (jwtErr) {
+      // Both verifications failed
+    }
+
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid or expired token.'
+    });
+
   } catch (error) {
+    console.error('Authentication middleware error:', error);
     res.status(401).json({
       success: false,
-      message: 'Invalid token.'
+      message: 'Authentication failed.'
     });
   }
 };
@@ -47,21 +85,83 @@ const authenticateAdmin = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const admin = await Admin.findById(decoded.adminId).select('-passwordHash');
+    const adminUser = await Admin.findById(decoded.adminId).select('-passwordHash');
     
-    if (!admin || !admin.isActive) {
+    if (!adminUser || !adminUser.isActive) {
       return res.status(401).json({
         success: false,
         message: 'Invalid token. Admin not found or inactive.'
       });
     }
 
-    req.admin = admin;
+    req.admin = adminUser;
     next();
   } catch (error) {
     res.status(401).json({
       success: false,
       message: 'Invalid admin token.'
+    });
+  }
+};
+
+// Authenticate admin OR user token
+const authenticateAdminOrUser = async (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'Access denied. No token provided.'
+      });
+    }
+
+    // Try Admin JWT
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (decoded.adminId) {
+        const adminUser = await Admin.findById(decoded.adminId).select('-passwordHash');
+        if (adminUser && adminUser.isActive) {
+          req.user = adminUser;
+          req.isAdmin = true;
+          return next();
+        }
+      }
+      if (decoded.userId) {
+        const user = await User.findById(decoded.userId).select('-passwordHash');
+        if (user) {
+          req.user = user;
+          req.isAdmin = false;
+          return next();
+        }
+      }
+    } catch (e) {}
+
+    // Try Firebase
+    try {
+      if (admin && admin.auth) {
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        let user = await User.findOne({ firebaseUid: decodedToken.uid }).select('-passwordHash');
+        if (!user && decodedToken.email) {
+          user = await User.findOne({ email: decodedToken.email.toLowerCase() }).select('-passwordHash');
+        }
+        if (user) {
+          req.user = user;
+          req.isAdmin = false;
+          return next();
+        }
+      }
+    } catch (e) {}
+
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid token. Authentication failed.'
+    });
+
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      message: 'Authentication failed.'
     });
   }
 };
@@ -101,6 +201,7 @@ const checkOwnership = (req, res, next) => {
 module.exports = {
   authenticate,
   authenticateAdmin,
+  authenticateAdminOrUser,
   authorize,
   checkOwnership
 };

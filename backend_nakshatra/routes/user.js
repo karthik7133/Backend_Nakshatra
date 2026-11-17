@@ -1,9 +1,33 @@
-const express = require('express');
+﻿const express = require('express');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
-const { authenticate, checkOwnership } = require('../middleware/auth');
+const { authenticate, authenticateAdminOrUser, checkOwnership } = require('../middleware/auth');
+const admin = require('../utils/firebaseAdmin'); // 🎯 CRITICAL: Import Firebase Admin SDK
 
 const router = express.Router();
+
+// --- START: SECURE URL VALIDATOR (PATCH for GHSA-9965-vmph-33xx) ---
+/**
+ * Custom validator to securely check if a string is a valid HTTP/HTTPS URL.
+ * Mitigates the validator.js bypass vulnerability.
+ * @param {string} value The URL string to validate.
+ * @returns {boolean} True if valid, false otherwise.
+ */
+const isSecureUrl = (value) => {
+  if (!value) return true; // Allows optional fields to be skipped
+  try {
+    const url = new URL(value);
+    // Enforce safe protocols (http: and https:)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false;
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+};
+// --- END: SECURE URL VALIDATOR ---
+
 
 // Update FCM Token
 router.put('/fcm-token', authenticate, [
@@ -23,7 +47,11 @@ router.put('/fcm-token', authenticate, [
 
     const updatedUser = await User.findByIdAndUpdate(
       req.user._id,
-      { fcmToken },
+      { 
+        fcmToken,
+        fcmTokenExpired: false,
+        fcmTokenExpiredAt: null
+      },
       { new: true, runValidators: true }
     );
 
@@ -51,7 +79,39 @@ router.put('/fcm-token', authenticate, [
   }
 });
 
-// Get user profile
+// Get current user profile (using token)
+router.get('/profile', authenticate, async (req, res) => {
+  try {
+    res.status(200).json({
+      success: true,
+      user: {
+        _id: req.user._id,
+        firebaseUid: req.user.firebaseUid,
+        name: req.user.name,
+        email: req.user.email,
+        phoneNumber: req.user.phoneNumber,
+        role: req.user.role,
+        profilePhotoUrl: req.user.profilePhotoUrl,
+        emailVerified: req.user.emailVerified,
+        location: req.user.location,
+        fcmToken: req.user.fcmToken,
+        fcmTokenExpired: req.user.fcmTokenExpired,
+        fcmTokenExpiredAt: req.user.fcmTokenExpiredAt,
+        createdAt: req.user.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Get user profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user profile',
+      error: error.message
+    });
+  }
+});
+
+// Get user profile by ID
 router.get('/:userId', authenticate, async (req, res) => {
   try {
     const user = await User.findById(req.params.userId);
@@ -78,11 +138,70 @@ router.get('/:userId', authenticate, async (req, res) => {
   }
 });
 
-// Update user profile
-router.put('/:userId', authenticate, checkOwnership, [
+// Update user profile by Firebase UID
+router.put('/:firebaseUid', authenticate, [
   body('name').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
-  body('profilePhotoUrl').optional().isURL().withMessage('Valid URL required for profile photo'),
+  // PATCH: Replaced isURL() with custom secure validator
+  body('profilePhotoUrl').optional().custom(isSecureUrl).withMessage('Valid HTTP/HTTPS URL required for profile photo'),
+  body('emailVerified').optional().isBoolean().withMessage('Email verified must be boolean'),
+  body('location.address').optional().trim().isLength({ min: 3, max: 200 }).withMessage('Address must be 3-200 characters'),
+  body('location.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates must be [longitude, latitude]')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { name, phoneNumber, profilePhotoUrl, emailVerified, location } = req.body;
+    const updateData = {};
+
+    if (name) updateData.name = name;
+    if (phoneNumber) updateData.phoneNumber = phoneNumber;
+    if (profilePhotoUrl) updateData.profilePhotoUrl = profilePhotoUrl;
+    if (emailVerified !== undefined) updateData.emailVerified = emailVerified;
+    if (location) updateData.location = location;
+
+    const updatedUser = await User.findOneAndUpdate(
+      { firebaseUid: req.params.firebaseUid },
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: updatedUser
+    });
+
+  } catch (error) {
+    console.error('Update user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update profile',
+      error: error.message
+    });
+  }
+});
+
+// Update user profile by MongoDB ID
+router.put('/id/:userId', authenticate, checkOwnership, [
+  body('name').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
+  body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
+  // PATCH: Replaced isURL() with custom secure validator
+  body('profilePhotoUrl').optional().custom(isSecureUrl).withMessage('Valid HTTP/HTTPS URL required for profile photo'),
   body('location.address').optional().trim().isLength({ min: 3, max: 200 }).withMessage('Address must be 3-200 characters'),
   body('location.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates must be [longitude, latitude]')
 ], async (req, res) => {
@@ -133,25 +252,53 @@ router.put('/:userId', authenticate, checkOwnership, [
   }
 });
 
+
 // Delete user account
-router.delete('/:userId', authenticate, checkOwnership, async (req, res) => {
+router.delete('/:userId', authenticateAdminOrUser, async (req, res) => {
+  console.log(`\n🔒 USER DELETE REQUEST: User ${req.user._id} (Admin: ${req.isAdmin}) attempting to delete ${req.params.userId}`);
+
   try {
-    const deletedUser = await User.findByIdAndDelete(req.params.userId);
-    
-    if (!deletedUser) {
+    // 🎯 FIX: Authorization check: Admin bypasses ownership.
+    const isSelfDeletion = req.user._id.toString() === req.params.userId;
+
+    if (!isSelfDeletion && !req.isAdmin) {
+        console.warn(`❌ DELETE FAILED (403): User is not owner and not Admin.`);
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. You can only delete your own account unless you are an admin.'
+        });
+    }
+
+    // 1. Find the user first to get their Firebase UID
+    const userToDelete = await User.findById(req.params.userId);
+
+    if (!userToDelete) {
+      console.warn(`❌ DELETE FAILED (404): User not found in DB.`);
       return res.status(404).json({
         success: false,
         message: 'User not found'
       });
     }
 
+    // 2. Delete user from Firebase Authentication
+    try {
+        await admin.auth().deleteUser(userToDelete.firebaseUid);
+        console.log(`✅ Firebase user deleted: ${userToDelete.firebaseUid}`);
+    } catch (firebaseError) {
+        console.error('⚠️ Could not delete Firebase user (ID may be stale):', firebaseError.message);
+    }
+
+    // 3. Delete user from MongoDB
+    await User.findByIdAndDelete(req.params.userId);
+
+    console.log(`🎉 DELETE SUCCESS: User ${req.params.userId} removed by ${req.isAdmin ? 'Admin' : 'Owner'}.`);
     res.status(200).json({
       success: true,
-      message: 'Account deleted successfully'
+      message: 'Account deleted successfully from DB and Firebase'
     });
 
   } catch (error) {
-    console.error('Delete user error:', error);
+    console.error('❌ CRITICAL DELETE ERROR:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to delete account',
@@ -159,6 +306,7 @@ router.delete('/:userId', authenticate, checkOwnership, async (req, res) => {
     });
   }
 });
+
 
 // Update user location
 router.post('/update-location', authenticate, [

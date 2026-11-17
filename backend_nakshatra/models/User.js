@@ -9,6 +9,12 @@ const userSchema = new mongoose.Schema({
       return new mongoose.Types.ObjectId().toString();
     }
   },
+  firebaseUid: {
+    type: String,
+    sparse: true,
+    index: true,
+    default: null
+  },
   name: {
     type: String,
     required: [true, 'Name is required'],
@@ -27,13 +33,16 @@ const userSchema = new mongoose.Schema({
   },
   phoneNumber: {
     type: String,
-    required: [true, 'Phone number is required'],
-    match: [/^[0-9]{10}$/, 'Please provide a valid 10-digit phone number']
+    default: '',
+    match: [/^[0-9]{0,10}$/, 'Please provide a valid 10-digit phone number']
   },
   passwordHash: {
     type: String,
-    required: [true, 'Password is required'],
-    minlength: [6, 'Password must be at least 6 characters']
+    default: null
+  },
+  emailVerified: {
+    type: Boolean,
+    default: false
   },
   profilePhotoUrl: {
     type: String,
@@ -76,7 +85,7 @@ userSchema.index({ location: '2dsphere' });
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('passwordHash')) return next();
+  if (!this.isModified('passwordHash') || !this.passwordHash) return next();
   
   try {
     const salt = await bcrypt.genSalt(12);
