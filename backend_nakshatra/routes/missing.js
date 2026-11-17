@@ -1,48 +1,122 @@
 const express = require('express');
-const { body, validationResult, check } = require('express-validator');
-const multer = require('multer');
-const cloudinary = require('cloudinary').v2;
+const { body, validationResult } = require('express-validator');
 const MissingReport = require('../models/MissingReport');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
-const { authenticate, authenticateAdminOrUser, authorize } = require('../middleware/auth');
+const { authenticate, authorize } = require('../middleware/auth');
 const admin = require('../utils/firebaseAdmin');
-
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
-
-// Configure multer for memory storage
-const storage = multer.memoryStorage();
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
-});
 
 const router = express.Router();
 
-// --- START: SECURE URL VALIDATOR (PATCH for GHSA-9965-vmph-33xx) ---
-/**
- * Custom validator to securely check if a string is a valid HTTP/HTTPS URL.
- * Mitigates the validator.js bypass vulnerability.
- */
-const isSecureUrl = (value) => {
-  if (!value) return true;
+// ============================================================
+// INTERNAL SYSTEM ENDPOINT — Called by Python scanner
+// POST /api/missing/system/camera-alert
+// Body: { missingId, similarityScore, systemSecret }
+// ============================================================
+router.post('/system/camera-alert', async (req, res) => {
   try {
-    const url = new URL(value);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return false;
-    }
-    return true;
-  } catch (err) {
-    return false;
-  }
-};
-// --- END: SECURE URL VALIDATOR ---
+    const { missingId, similarityScore, systemSecret } = req.body;
 
+    // Simple secret key auth (set SYSTEM_SECRET in .env)
+    const expectedSecret = process.env.SYSTEM_SECRET || 'nakshatra_system_2024';
+    if (systemSecret !== expectedSecret) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' });
+    }
+
+    if (!missingId) {
+      return res.status(400).json({ success: false, message: 'missingId required' });
+    }
+
+    // Find the missing report
+    const { ObjectId } = require('mongoose').Types;
+    let query = { missingId: missingId };
+    if (ObjectId.isValid(missingId)) {
+      query = { $or: [{ _id: new ObjectId(missingId) }, { missingId: missingId }] };
+    }
+    const report = await MissingReport.findOne(query);
+    if (!report) {
+      return res.status(404).json({ success: false, message: 'Missing report not found' });
+    }
+
+    // Get parent user
+    const userId = report.reportedBy;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Parent user not found' });
+    }
+
+    const childName = report.name;
+    const simPct = similarityScore ? `${(similarityScore * 100).toFixed(1)}%` : 'High';
+
+    // 1. Save notification to DB
+    const notification = new Notification({
+      type: 'found_alert',
+      title: `🚨 Possible Match Found: ${childName}`,
+      message: `Our camera system detected a ${simPct} confidence facial recognition match for ${childName} in video surveillance. Please check your email for the photo.`,
+      targetUsers: [userId],
+      relatedMissingId: report._id,
+      priority: 'urgent',
+      isRead: [],
+      timestamp: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      actionUrl: 'CAMERA_FOUND_REPORT'
+    });
+    await notification.save();
+
+    // 2. Send FCM push notification
+    let fcmResult = null;
+    if (user.fcmToken) {
+      try {
+        const fcmMessage = {
+          notification: {
+            title: `🚨 Possible Match Found: ${childName}`,
+            body: `Camera system detected ${simPct} confidence match. Check your email for photo.`
+          },
+          data: {
+            type: 'camera_found_alert',
+            missingId: report._id.toString(),
+            missingIdStr: report.missingId || '',
+            actionUrl: 'CAMERA_FOUND_REPORT',
+            click_action: 'FLUTTER_NOTIFICATION_CLICK'
+          },
+          android: {
+            priority: 'high',
+            notification: {
+              channelId: 'nakshatra_alerts',
+              priority: 'max',
+              defaultSound: true,
+              defaultVibrateTimings: true,
+              visibility: 'PUBLIC'
+            }
+          },
+          apns: {
+            headers: { 'apns-priority': '10' },
+            payload: { aps: { sound: 'default', badge: 1, contentAvailable: true } }
+          },
+          token: user.fcmToken
+        };
+        fcmResult = await admin.messaging().send(fcmMessage);
+        console.log(`[CAMERA-ALERT] FCM sent to ${user.email}: ${fcmResult}`);
+      } catch (fcmErr) {
+        console.error('[CAMERA-ALERT] FCM send failed:', fcmErr.message);
+      }
+    } else {
+      console.warn(`[CAMERA-ALERT] No FCM token for user ${userId}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Alert sent successfully',
+      notificationId: notification._id,
+      fcmSent: !!fcmResult,
+      fcmMessageId: fcmResult || null
+    });
+
+  } catch (error) {
+    console.error('[CAMERA-ALERT] Error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 // Helper function to calculate distance between two coordinates (Haversine formula)
 function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -61,8 +135,7 @@ router.post('/', authenticate, [
   body('name').trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('age').isInt({ min: 0, max: 18 }).withMessage('Age must be 0-18 years'),
   body('gender').isIn(['male', 'female', 'other']).withMessage('Invalid gender'),
-  // SECURE PATCH: Use custom validator
-  check('photoUrl').custom(isSecureUrl).withMessage('Valid HTTP/HTTPS photo URL required'),
+  body('photoUrl').isURL().withMessage('Valid photo URL required'),
   body('description').trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
   body('lastSeenLocation.coordinates').isArray({ min: 2, max: 2 }).withMessage('Coordinates required [longitude, latitude]'),
   body('lastSeenLocation.address').trim().isLength({ min: 5, max: 200 }).withMessage('Address must be 5-200 characters'),
@@ -112,13 +185,14 @@ router.post('/', authenticate, [
     // Find nearby users to notify (within 20km radius)
     let nearbyUsers = [];
     try {
-      const radiusInKm = 20;
-      const radiusInRadians = radiusInKm / 6371; // Earth's radius in km
-      
       nearbyUsers = await User.find({
         location: {
-          $geoWithin: {
-            $centerSphere: [lastSeenLocation.coordinates, radiusInRadians]
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: lastSeenLocation.coordinates
+            },
+            $maxDistance: 20000 // 20km in meters
           }
         },
         _id: { $ne: req.user._id }
@@ -198,6 +272,20 @@ router.post('/', authenticate, [
                   missingId: missingReport._id.toString(),
                   click_action: 'FLUTTER_NOTIFICATION_CLICK'
                 },
+                android: {
+                  priority: 'high',
+                  notification: {
+                    channelId: 'nakshatra_alerts',
+                    priority: 'max',
+                    defaultSound: true,
+                    defaultVibrateTimings: true,
+                    visibility: 'public',
+                  },
+                },
+                apns: {
+                  headers: { 'apns-priority': '10' },
+                  payload: { aps: { sound: 'default', badge: 1, 'content-available': 1 } },
+                },
                 token: fcmTokens[i]
               };
 
@@ -253,46 +341,32 @@ router.post('/', authenticate, [
   }
 });
 
-// Get all missing reports (with pagination and filters) - FIXED VERSION
+// Get all missing reports (with pagination and filters)
 router.get('/', authenticate, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    const status = req.query.status;          // Allow undefined to fetch all
-    const searchName = req.query.search;      // NEW: Search by name
-    const searchAddress = req.query.address;  // NEW: Search by address
+    const status = req.query.status || 'active';
     const skip = (page - 1) * limit;
 
-    let query = {}; // Start with empty query
+    let query = { status };
 
-    // 1. Filter by Status (Applies only if status is explicitly provided and valid)
-    if (status && ['active', 'found', 'closed'].includes(status)) {
-        query.status = status;
-    }
-    
-    // 2. Location-based filtering (existing logic, retained for compatibility)
+    // Location-based filtering if coordinates provided
     if (req.query.lat && req.query.lng && req.query.radius) {
       const coordinates = [parseFloat(req.query.lng), parseFloat(req.query.lat)];
-      const radiusInKm = parseInt(req.query.radius);
-      const radiusInRadians = radiusInKm / 6371; // Earth's radius in km
+      const radius = parseInt(req.query.radius) * 1000; // Convert km to meters
 
       query.lastSeenLocation = {
-        $geoWithin: {
-          $centerSphere: [coordinates, radiusInRadians]
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: coordinates
+          },
+          $maxDistance: radius
         }
       };
     }
-    
-    // 3. Search by Name (Case-insensitive regex search)
-    if (searchName) {
-        query.name = { $regex: new RegExp(searchName, 'i') };
-    }
-    
-    // 4. Filter by Location Address (Case-insensitive regex search)
-    if (searchAddress) {
-        query['lastSeenLocation.address'] = { $regex: new RegExp(searchAddress, 'i') };
-    }
-    
+
     const missingReports = await MissingReport.find(query)
       .populate('reportedBy', 'name phoneNumber')
       .sort({ createdAt: -1 })
@@ -373,17 +447,10 @@ router.get('/user/:userId', authenticate, async (req, res) => {
 });
 
 // Update missing report
-router.put('/:missingId', authenticate, upload.single('photo'), [
-  body('name').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
-  body('age').optional().isInt({ min: 0, max: 18 }).withMessage('Age must be 0-18 years'),
-  body('gender').optional().isIn(['male', 'female', 'other']).withMessage('Invalid gender'),
+router.put('/:missingId', authenticate, [
   body('description').optional().trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
   body('contactNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit contact number required'),
-  body('status').optional().isIn(['active', 'found', 'closed']).withMessage('Invalid status'),
-  // SECURE PATCH: Use custom validator
-  check('photoUrl').optional().custom(isSecureUrl).withMessage('Valid HTTP/HTTPS photo URL required'),
-  body('lastSeenLocation.address').optional().trim().isLength({ min: 5, max: 200 }).withMessage('Address must be 5-200 characters'),
-  body('lastSeenLocation.coordinates').optional().isArray({ min: 2, max: 2 }).withMessage('Coordinates required [longitude, latitude]')
+  body('status').optional().isIn(['active', 'found', 'closed']).withMessage('Invalid status')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -412,90 +479,12 @@ router.put('/:missingId', authenticate, upload.single('photo'), [
       });
     }
 
-    // Handle both multipart form data and JSON
-    let { name, age, gender, description, contactNumber, status, lastSeenLocation, photoUrl } = req.body;
-    
-    // If lastSeenLocation is a string (from multipart), parse it
-    if (typeof lastSeenLocation === 'string') {
-      try {
-        lastSeenLocation = JSON.parse(lastSeenLocation);
-      } catch (e) {
-        console.error('Error parsing lastSeenLocation:', e);
-      }
-    }
+    const { description, contactNumber, status } = req.body;
     const updateData = {};
 
-    // Update all allowed fields with explicit checks
-    if (name && name.trim()) {
-      updateData.name = name.trim();
-    }
-    if (age !== undefined && age !== null) {
-      updateData.age = parseInt(age);
-    }
-    if (gender && gender.trim()) {
-      updateData.gender = gender.toLowerCase().trim();
-    }
-    if (description && description.trim()) {
-      updateData.description = description.trim();
-    }
-    if (contactNumber && contactNumber.trim()) {
-      updateData.contactNumber = contactNumber.trim();
-    }
-    if (status && status.trim()) {
-      updateData.status = status.trim();
-    }
-    if (photoUrl && photoUrl.trim()) {
-      updateData.photoUrl = photoUrl.trim();
-    }
-    
-    // Handle location update with proper GeoJSON format
-    if (lastSeenLocation && typeof lastSeenLocation === 'object') {
-      updateData.lastSeenLocation = {
-        type: 'Point' // Required for GeoJSON
-      };
-      if (lastSeenLocation.address && lastSeenLocation.address.trim()) {
-        updateData.lastSeenLocation.address = lastSeenLocation.address.trim();
-      }
-      if (lastSeenLocation.coordinates && Array.isArray(lastSeenLocation.coordinates) && lastSeenLocation.coordinates.length === 2) {
-        updateData.lastSeenLocation.coordinates = lastSeenLocation.coordinates;
-      }
-    }
-
-    // Handle image upload if file is provided
-    if (req.file) {
-      try {
-        // Upload image to Cloudinary
-        const result = await new Promise((resolve, reject) => {
-          cloudinary.uploader.upload_stream(
-            {
-              resource_type: 'image',
-              folder: 'missing_reports',
-              transformation: [
-                { width: 800, height: 800, crop: 'limit' },
-                { quality: 'auto' }
-              ]
-            },
-            (error, result) => {
-              if (error) reject(error);
-              else resolve(result);
-            }
-          ).end(req.file.buffer);
-        });
-
-        updateData.photoUrl = result.secure_url;
-        console.log('Image uploaded successfully:', result.secure_url);
-      } catch (error) {
-        console.error('Image upload error:', error);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to upload image',
-          error: error.message
-        });
-      }
-    }
-
-    // Update the updatedAt timestamp
-    updateData.updatedAt = new Date();
+    if (description) updateData.description = description;
+    if (contactNumber) updateData.contactNumber = contactNumber;
+    if (status) updateData.status = status;
 
     const updatedReport = await MissingReport.findByIdAndUpdate(
       req.params.missingId,
@@ -520,66 +509,8 @@ router.put('/:missingId', authenticate, upload.single('photo'), [
 });
 
 // Delete missing report
-router.delete('/:missingId', authenticateAdminOrUser, async (req, res) => {
-  console.log(`\n🔒 MISSING REPORT DELETE REQUEST: User ${req.user._id} (Admin: ${req.isAdmin}) attempting to delete ${req.params.missingId}`);
+router.delete('/:missingId', authenticate, async (req, res) => {
   try {
-    const missingReport = await MissingReport.findById(req.params.missingId);
-
-    if (!missingReport) {
-      console.warn(`❌ DELETE FAILED: Report not found.`);
-      return res.status(404).json({
-        success: false,
-        message: 'Missing report not found'
-      });
-    }
-
-    // 🎯 FIX: Authorization check. Allow deletion if user is the report owner OR is an Admin
-    const isOwner = missingReport.reportedBy.toString() === req.user._id.toString();
-
-    if (!isOwner && !req.isAdmin) {
-      console.warn(`❌ DELETE FAILED (403): Not owner and not Admin.`);
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Only the report owner or an admin can delete this report.'
-      });
-    }
-
-    await MissingReport.findByIdAndDelete(req.params.missingId);
-
-    console.log(`🎉 DELETE SUCCESS: Missing Report ${req.params.missingId} removed.`);
-    res.status(200).json({
-      success: true,
-      message: 'Missing report deleted successfully'
-    });
-
-  } catch (error) {
-    console.error('❌ CRITICAL DELETE ERROR:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete missing report',
-      error: error.message
-    });
-  }
-});
-
-// Close or mark a missing report as found (Manual Parent Action) - NEW ROUTE
-router.patch('/:missingId/status', authenticate, [
-  body('status')
-    .isIn(['found', 'closed'])
-    .withMessage('Invalid status. Must be "found" or "closed"'),
-  body('closeReason').optional().trim().isLength({ max: 500 }).withMessage('Reason cannot exceed 500 characters')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { status, closeReason } = req.body;
     const missingReport = await MissingReport.findById(req.params.missingId);
 
     if (!missingReport) {
@@ -593,35 +524,22 @@ router.patch('/:missingId/status', authenticate, [
     if (missingReport.reportedBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only close your own reports.'
+        message: 'Access denied. You can only delete your own reports.'
       });
     }
-    
-    // Prevent re-opening a closed case via this route
-    if (missingReport.status !== 'active') {
-        return res.status(400).json({
-            success: false,
-            message: `This report is already marked as ${missingReport.status}`
-        });
-    }
 
-    // Update the status and persist the closeReason
-    missingReport.status = status;
-    missingReport.closeReason = closeReason || (status === 'found' ? 'Found by family/self-resolved' : 'Closed manually by reporter');
-
-    await missingReport.save();
+    await MissingReport.findByIdAndDelete(req.params.missingId);
 
     res.status(200).json({
       success: true,
-      message: `Missing report status updated to '${status}' successfully`,
-      updatedReport: missingReport
+      message: 'Missing report deleted successfully'
     });
 
   } catch (error) {
-    console.error('Close missing report error:', error);
+    console.error('Delete missing report error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to close missing report',
+      message: 'Failed to delete missing report',
       error: error.message
     });
   }

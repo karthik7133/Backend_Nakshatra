@@ -60,15 +60,6 @@ const foundReportSchema = new mongoose.Schema({
     enum: ['pending', 'verified', 'rejected'],
     default: 'pending'
   },
-  matchConfidence: {
-    type: Number, // Stores the percentage score
-    default: 0
-  },
-  matchStrength: {
-    type: String, // Stores 'Strong Match', 'Moderate Match', etc.
-    enum: ['Strong Match', 'Moderate Match', 'Weak Match', 'No Face Detected', 'Error', 'Not Compared'],
-    default: 'Not Compared'
-  },
   createdAt: {
     type: Date,
     default: Date.now

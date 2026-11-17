@@ -9,29 +9,6 @@ const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
-// --- START: SECURE URL VALIDATOR (PATCH for GHSA-9965-vmph-33xx) ---
-/**
- * Custom validator to securely check if a string is a valid HTTP/HTTPS URL.
- * Mitigates the validator.js bypass vulnerability.
- * @param {string} value The URL string to validate.
- * @returns {boolean} True if valid, false otherwise.
- */
-const isSecureUrl = (value) => {
-  if (!value) return true; // Allows optional fields to be skipped
-  try {
-    const url = new URL(value);
-    // Enforce safe protocols (http: and https:)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return false;
-    }
-    return true;
-  } catch (err) {
-    return false;
-  }
-};
-// --- END: SECURE URL VALIDATOR ---
-
-
 // Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -46,16 +23,13 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
-// Firebase User Registration
+// User Registration
 router.post('/register', [
-  body('firebaseUid').notEmpty().withMessage('Firebase UID is required'),
   body('name').trim().isLength({ min: 2, max: 50 }).withMessage('Name must be 2-50 characters'),
   body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
-  body('phoneNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
-  body('role').optional().isIn(['user', 'admin']).withMessage('Invalid role'),
-  // PATCH: Added validation for profilePhotoUrl using secure custom function
-  body('profilePhotoUrl').optional().custom(isSecureUrl).withMessage('Valid HTTP/HTTPS URL required for profile photo'),
-  body('emailVerified').optional().isBoolean().withMessage('Email verified must be boolean')
+  body('phoneNumber').matches(/^[0-9]{10}$/).withMessage('Valid 10-digit phone number required'),
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('role').optional().isIn(['user', 'admin']).withMessage('Invalid role')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -67,70 +41,50 @@ router.post('/register', [
       });
     }
 
-    const { firebaseUid, name, email, phoneNumber, role, profilePhotoUrl, emailVerified } = req.body;
+    const { name, email, phoneNumber, password, role, profilePhotoUrl } = req.body;
 
-    // Check if user already exists by Firebase UID or email
+    // Check if user already exists
     const existingUser = await User.findOne({ 
-      $or: [{ firebaseUid }, { email }] 
+      $or: [{ email }, { phoneNumber }] 
     });
 
     if (existingUser) {
-      // Update existing user instead of creating new one
-      const updatedUser = await User.findOneAndUpdate(
-        { $or: [{ firebaseUid }, { email }] },
-        {
-          firebaseUid,
-          name,
-          email,
-          phoneNumber: phoneNumber || existingUser.phoneNumber,
-          role: role || existingUser.role,
-          profilePhotoUrl: profilePhotoUrl || existingUser.profilePhotoUrl,
-          emailVerified: emailVerified !== undefined ? emailVerified : existingUser.emailVerified
-        },
-        { new: true, runValidators: true }
-      );
-
-      return res.status(200).json({
-        success: true,
-        message: 'User updated successfully',
-        user: {
-          _id: updatedUser._id,
-          firebaseUid: updatedUser.firebaseUid,
-          name: updatedUser.name,
-          email: updatedUser.email,
-          role: updatedUser.role,
-          profilePhotoUrl: updatedUser.profilePhotoUrl,
-          emailVerified: updatedUser.emailVerified
-        }
+      return res.status(400).json({
+        success: false,
+        message: 'User already exists with this email or phone number'
       });
     }
 
     // Create new user
     const user = new User({
-      firebaseUid,
       name,
       email,
-      phoneNumber: phoneNumber || '',
+      phoneNumber,
+      passwordHash: password, // Will be hashed by the model pre-save hook
       role: role || 'user',
-      profilePhotoUrl,
-      emailVerified: emailVerified || false
+      profilePhotoUrl
     });
 
     await user.save();
 
-    console.log(`✅ New user registered: ${user.name} (${user._id}) - Firebase UID: ${user.firebaseUid}`);
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRE }
+    );
 
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
+      userId: user._id,
+      token,
       user: {
-        _id: user._id,
-        firebaseUid: user.firebaseUid,
+        id: user._id,
         name: user.name,
         email: user.email,
         role: user.role,
-        profilePhotoUrl: user.profilePhotoUrl,
-        emailVerified: user.emailVerified
+        profilePhotoUrl: user.profilePhotoUrl
       }
     });
 
@@ -150,7 +104,6 @@ router.post('/login', [
   body('password').notEmpty().withMessage('Password is required')
 ], async (req, res) => {
   try {
-// ... rest of the login route
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({

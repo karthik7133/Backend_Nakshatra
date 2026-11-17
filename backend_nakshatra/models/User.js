@@ -9,12 +9,6 @@ const userSchema = new mongoose.Schema({
       return new mongoose.Types.ObjectId().toString();
     }
   },
-  firebaseUid: {
-    type: String,
-    unique: true,
-    required: [true, 'Firebase UID is required'],
-    index: true
-  },
   name: {
     type: String,
     required: [true, 'Name is required'],
@@ -33,17 +27,13 @@ const userSchema = new mongoose.Schema({
   },
   phoneNumber: {
     type: String,
-    required: false, // Make optional for Firebase users
+    required: [true, 'Phone number is required'],
     match: [/^[0-9]{10}$/, 'Please provide a valid 10-digit phone number']
   },
   passwordHash: {
     type: String,
-    required: false, // Not needed for Firebase users
+    required: [true, 'Password is required'],
     minlength: [6, 'Password must be at least 6 characters']
-  },
-  emailVerified: {
-    type: Boolean,
-    default: false
   },
   profilePhotoUrl: {
     type: String,
