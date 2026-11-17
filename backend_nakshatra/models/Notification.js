@@ -42,6 +42,18 @@ const notificationSchema = new mongoose.Schema({
     enum: ['low', 'medium', 'high', 'urgent'],
     default: 'medium'
   },
+  actionUrl: {
+    type: String,
+    default: null
+  },
+  actionLabel: {
+    type: String,
+    default: null
+  },
+  cameraReportData: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
   isRead: [{
     userId: {
       type: mongoose.Schema.Types.ObjectId,
