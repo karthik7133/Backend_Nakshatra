@@ -65,6 +65,7 @@ router.post('/system/camera-alert', async (req, res) => {
 
     // 2. Send FCM push notification
     let fcmResult = null;
+    let fcmError = null;
     if (user.fcmToken) {
       try {
         const fcmMessage = {
@@ -98,9 +99,11 @@ router.post('/system/camera-alert', async (req, res) => {
         fcmResult = await admin.messaging().send(fcmMessage);
         console.log(`[CAMERA-ALERT] FCM sent to ${user.email}: ${fcmResult}`);
       } catch (fcmErr) {
+        fcmError = fcmErr.message;
         console.error('[CAMERA-ALERT] FCM send failed:', fcmErr.message);
       }
     } else {
+      fcmError = 'No FCM token stored for this user';
       console.warn(`[CAMERA-ALERT] No FCM token for user ${userId}`);
     }
 
@@ -109,7 +112,8 @@ router.post('/system/camera-alert', async (req, res) => {
       message: 'Alert sent successfully',
       notificationId: notification._id,
       fcmSent: !!fcmResult,
-      fcmMessageId: fcmResult || null
+      fcmMessageId: fcmResult || null,
+      fcmError: fcmError || undefined
     });
 
   } catch (error) {
