@@ -387,6 +387,21 @@ router.post('/notifications/broadcast', authenticateAdmin, [
   }
 });
 
+// Admin delete found report
+router.delete('/found/:id', authenticateAdmin, async (req, res) => {
+  try {
+    const foundReport = await FoundReport.findById(req.params.id);
+    if (!foundReport) {
+      return res.status(404).json({ success: false, message: 'Found report not found' });
+    }
+    await FoundReport.findByIdAndDelete(req.params.id);
+    res.status(200).json({ success: true, message: 'Found report deleted successfully' });
+  } catch (error) {
+    console.error('Admin delete found report error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete found report', error: error.message });
+  }
+});
+
 // Admin delete missing report
 router.delete('/missing/:id', authenticateAdmin, async (req, res) => {
   try {
