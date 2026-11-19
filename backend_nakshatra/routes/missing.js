@@ -215,56 +215,66 @@ router.post('/', authenticate, [
     console.log(`   Users without location: ${totalUsers - usersWithLocation}`);
 
     // Find nearby users to notify (within 20km radius)
+    // Uses $geoWithin/$centerSphere (supports .sort() unlike $near), falls back to all users if none found
     let nearbyUsers = [];
+    let usedFallback = false;
     try {
+      const radiusRadians = 20 / 6371; // 20km in Earth radians
       nearbyUsers = await User.find({
-        location: {
-          $near: {
-            $geometry: {
-              type: 'Point',
-              coordinates: lastSeenLocation.coordinates
-            },
-            $maxDistance: 20000 // 20km in meters
-          }
-        },
-        _id: { $ne: req.user._id }
+        $and: [
+          {
+            'location.coordinates': {
+              $geoWithin: {
+                $centerSphere: [lastSeenLocation.coordinates, radiusRadians]
+              }
+            }
+          },
+          // Exclude users with default [0,0] location (location not set)
+          { 'location.coordinates': { $ne: [0, 0] } },
+          { _id: { $ne: req.user._id } }
+        ]
       }).select('_id name fcmToken location');
     } catch (geoError) {
       console.error('❌ Geospatial query error:', geoError.message);
-      if (geoError.message.includes('2dsphere')) {
-        console.error('⚠️  CRITICAL: 2dsphere index not found on location field!');
-        console.error('   Run: node scripts/createIndexes.js to create the index');
-      }
-      throw geoError;
+      nearbyUsers = []; // fall through to fallback
     }
 
     console.log(`\n📊 SEARCH RESULTS:`);
     console.log(`✅ Total users found within 20km: ${nearbyUsers.length}`);
+
+    // 🔑 FALLBACK: If no nearby users found (location not updated yet), notify ALL users with FCM tokens
+    if (nearbyUsers.length === 0) {
+      console.log(`⚠️  No nearby users — falling back to ALL users with FCM tokens`);
+      nearbyUsers = await User.find({
+        _id: { $ne: req.user._id },
+        fcmToken: { $ne: null, $exists: true }
+      }).select('_id name fcmToken location');
+      usedFallback = true;
+      console.log(`📢 Fallback: found ${nearbyUsers.length} total users with FCM tokens`);
+    }
     
     if (nearbyUsers.length > 0) {
       const usersWithFCM = nearbyUsers.filter(user => user.fcmToken);
       console.log(`📱 Users with FCM tokens: ${usersWithFCM.length}`);
       console.log(`📵 Users without FCM tokens: ${nearbyUsers.length - usersWithFCM.length}`);
       
-      console.log(`\n👥 Nearby Users Details:`);
+      console.log(`\n👥 Target Users Details:`);
       nearbyUsers.forEach((user, index) => {
-        const distance = user.location && user.location.coordinates 
+        const coords = user.location && user.location.coordinates;
+        const distance = coords && !(coords[0]===0 && coords[1]===0)
           ? calculateDistance(
               lastSeenLocation.coordinates[1], 
               lastSeenLocation.coordinates[0],
-              user.location.coordinates[1], 
-              user.location.coordinates[0]
+              coords[1], 
+              coords[0]
             ).toFixed(2)
-          : 'N/A';
-        console.log(`   ${index + 1}. ${user.name} (${user._id}) - ${distance} km away - FCM: ${user.fcmToken ? '✓' : '✗'}`);
+          : usedFallback ? 'fallback' : 'N/A';
+        console.log(`   ${index + 1}. ${user.name} (${user._id}) - ${distance} km - FCM: ${user.fcmToken ? '✓' : '✗'}`);
       });
-    } else {
-      console.log(`⚠️  No users found within 20km radius`);
-      console.log(`💡 Tip: Users need to update their location via the app`);
     }
     console.log('========================================\n');
 
-    // Create notification for nearby users
+    // Create notification for nearby users (or all users via fallback)
     if (nearbyUsers.length > 0) {
       const notification = new Notification({
         type: 'missing_alert',
