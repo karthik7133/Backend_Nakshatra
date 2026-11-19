@@ -5,6 +5,8 @@ const helmet = require('helmet');
 // Removed: const rateLimit = require('express-rate-limit');
 const { Server } = require('socket.io');
 const http = require('http');
+const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 require('dotenv').config();
 
@@ -69,26 +71,50 @@ mongoose.connect(MONGODB_URI, {
   process.exit(1);
 });
 
+// Meaningful Text Analyzer helper (instant JS analyzer)
+function isMeaningfulText(text) {
+  if (!text || typeof text !== 'string' || text.trim().length < 2) return false;
+  const words = text.toLowerCase().match(/[a-z]+/g);
+  if (!words || words.length === 0) {
+    const alphanumeric = text.toLowerCase().match(/[a-z0-9]+/g);
+    return Boolean(alphanumeric && alphanumeric.length > 0);
+  }
+  let validWords = 0;
+  for (const w of words) {
+    const hasVowel = /[aeiouy]/.test(w);
+    const noExcessiveRepeat = !/(.)\1{3,}/.test(w);
+    if (hasVowel && w.length >= 1 && w.length <= 30 && noExcessiveRepeat) {
+      validWords++;
+    }
+  }
+  return (validWords / words.length) >= 0.5;
+}
+
 // ⚠️ CRITICAL: Define analyzer route BEFORE other routes
 // ✅ Text Analyzer endpoint
 app.post('/api/analyze', (req, res) => {
-  // Log only text
-  console.log('📥 Analyzer request received:', { text: req.body.text?.substring(0, 50) });
+  const { text } = req.body;
+  console.log('📥 Analyzer request received:', { text: text?.substring(0, 50) });
   
-  const { text } = req.body; // Only destructure text
-  
-  if (!text) { // Only check if text is present
+  if (!text) {
     return res.status(400).json({ 
       success: false, 
-      message: 'Text is required' // Updated message
+      message: 'Text is required'
     });
   }
 
-  try {
-    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-    // Only pass 'text' argument to the Python script
-    const python = spawn(pythonCmd, ['analyzer.py', text]); 
+  const scriptPath = path.join(__dirname, 'analyzer.py');
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
 
+  // If analyzer.py does not exist on disk, use built-in JS analyzer directly
+  if (!fs.existsSync(scriptPath)) {
+    const result = isMeaningfulText(text) ? 'Good Text' : 'Garbage Text';
+    console.log(`✅ Analyzed via built-in JS: ${result}`);
+    return res.json({ success: true, result });
+  }
+
+  try {
+    const python = spawn(pythonCmd, [scriptPath, text]);
     let output = '';
     let errorOutput = '';
 
@@ -98,44 +124,34 @@ app.post('/api/analyze', (req, res) => {
 
     python.stderr.on('data', (data) => {
       errorOutput += data.toString();
-      console.error('⚠️ Python stderr:', data.toString());
+      console.warn('⚠️ Python stderr:', data.toString());
     });
 
     python.on('error', (error) => {
-      console.error('❌ Failed to start Python process:', error);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to start analyzer. Ensure Python is installed.',
-        error: error.message 
-      });
+      console.warn('⚠️ Python spawn failed, using JS fallback:', error.message);
+      const result = isMeaningfulText(text) ? 'Good Text' : 'Garbage Text';
+      return res.json({ success: true, result });
     });
 
     python.on('close', (code) => {
       if (code !== 0) {
-        console.error('❌ Python process exited with code:', code);
-        console.error('Error output:', errorOutput);
-        return res.status(500).json({ 
-          success: false, 
-          message: 'Analyzer execution failed',
-          error: errorOutput || 'Unknown error'
-        });
+        console.warn(`⚠️ Python exited with code ${code}, using JS fallback`);
+        const result = isMeaningfulText(text) ? 'Good Text' : 'Garbage Text';
+        return res.json({ success: true, result });
       }
 
-      output = output.trim();
-      console.log('✅ Analysis result:', output);
-      
-      return res.json({ 
-        success: true, 
-        result: output
-      });
+      const trimmed = output.trim();
+      const result = trimmed === 'Good Text' || trimmed === 'Garbage Text' 
+        ? trimmed 
+        : (isMeaningfulText(text) ? 'Good Text' : 'Garbage Text');
+
+      console.log('✅ Analysis result:', result);
+      return res.json({ success: true, result });
     });
   } catch (err) {
-    console.error('❌ Analyzer execution error:', err);
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Analyzer failed to execute',
-      error: err.message 
-    });
+    console.warn('⚠️ Analyzer exception, using JS fallback:', err.message);
+    const result = isMeaningfulText(text) ? 'Good Text' : 'Garbage Text';
+    return res.json({ success: true, result });
   }
 });
 
