@@ -387,4 +387,19 @@ router.post('/notifications/broadcast', authenticateAdmin, [
   }
 });
 
+// Admin delete missing report
+router.delete('/missing/:id', authenticateAdmin, async (req, res) => {
+  try {
+    const missingReport = await MissingReport.findById(req.params.id);
+    if (!missingReport) {
+      return res.status(404).json({ success: false, message: 'Missing report not found' });
+    }
+    await MissingReport.findByIdAndDelete(req.params.id);
+    res.status(200).json({ success: true, message: 'Missing report deleted successfully' });
+  } catch (error) {
+    console.error('Admin delete missing report error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete missing report', error: error.message });
+  }
+});
+
 module.exports = router;
