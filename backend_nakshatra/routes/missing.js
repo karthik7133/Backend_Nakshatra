@@ -3,7 +3,7 @@ const { body, validationResult } = require('express-validator');
 const MissingReport = require('../models/MissingReport');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, authenticateAdminOrUser } = require('../middleware/auth');
 const admin = require('../utils/firebaseAdmin');
 
 const router = express.Router();
@@ -488,7 +488,7 @@ router.get('/user/:userId', authenticate, async (req, res) => {
 });
 
 // Update missing report
-router.put('/:missingId', authenticate, [
+router.put('/:missingId', authenticateAdminOrUser, [
   body('description').optional().trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
   body('contactNumber').optional().matches(/^[0-9]{10}$/).withMessage('Valid 10-digit contact number required'),
   body('status').optional().isIn(['active', 'found', 'closed']).withMessage('Invalid status')
@@ -512,11 +512,12 @@ router.put('/:missingId', authenticate, [
       });
     }
 
-    // Check if user is the owner of the report
-    if (missingReport.reportedBy.toString() !== req.user._id.toString()) {
+    // Check if user is the owner of the report OR is an Admin
+    const isOwner = missingReport.reportedBy && (missingReport.reportedBy.toString() === req.user._id.toString());
+    if (!isOwner && !req.isAdmin) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only update your own reports.'
+        message: 'Access denied. You can only update your own reports unless you are an admin.'
       });
     }
 
@@ -550,7 +551,7 @@ router.put('/:missingId', authenticate, [
 });
 
 // Delete missing report
-router.delete('/:missingId', authenticate, async (req, res) => {
+router.delete('/:missingId', authenticateAdminOrUser, async (req, res) => {
   try {
     const missingReport = await MissingReport.findById(req.params.missingId);
 
@@ -561,11 +562,12 @@ router.delete('/:missingId', authenticate, async (req, res) => {
       });
     }
 
-    // Check if user is the owner of the report
-    if (missingReport.reportedBy.toString() !== req.user._id.toString()) {
+    // Check if user is the owner of the report OR is an Admin
+    const isOwner = missingReport.reportedBy && (missingReport.reportedBy.toString() === req.user._id.toString());
+    if (!isOwner && !req.isAdmin) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only delete your own reports.'
+        message: 'Access denied. You can only delete your own reports unless you are an admin.'
       });
     }
 
